@@ -102,6 +102,34 @@ impl Value {
         }));
         out
     }
+
+    pub fn dot(w: &[Value], x: &[Value], b: &Value) -> Value {
+        let mut data = b.0.borrow().data;
+        for (wi, xi) in w.iter().zip(x.iter()) {
+            data += wi.0.borrow().data * xi.0.borrow().data;
+        }
+        let out = Value::new(data);
+        
+        let mut prev = w.to_vec();
+        prev.extend_from_slice(x);
+        prev.push(b.clone());
+        out.0.borrow_mut()._prev = prev;
+
+        let w_clone = w.to_vec();
+        let x_clone = x.to_vec();
+        let b_clone = b.clone();
+
+        out.0.borrow_mut()._backward = Some(Box::new(move |out_grad| {
+            for (wi, xi) in w_clone.iter().zip(x_clone.iter()) {
+                let w_data = wi.0.borrow().data;
+                let x_data = xi.0.borrow().data;
+                wi.0.borrow_mut().grad += x_data * out_grad;
+                xi.0.borrow_mut().grad += w_data * out_grad;
+            }
+            b_clone.0.borrow_mut().grad += out_grad;
+        }));
+        out
+    }
 }
 
 impl Add for Value {

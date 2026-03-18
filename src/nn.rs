@@ -18,11 +18,7 @@ impl Neuron {
     }
 
     pub fn call(&self, x: &[Value]) -> Value {
-        let mut act = self.b.clone();
-        for (wi, xi) in self.w.iter().zip(x.iter()) {
-            act = act + (wi.clone() * xi.clone());
-        }
-        act.tanh()
+        Value::dot(&self.w, x, &self.b).tanh()
     }
 
     pub fn parameters(&self) -> Vec<Value> {
