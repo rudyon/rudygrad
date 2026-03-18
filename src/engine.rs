@@ -12,6 +12,7 @@ pub enum Op {
     ReLU,
     Tanh,
     Dot(usize),
+    DotTanh(usize),
 }
 
 #[derive(Clone)]
@@ -20,6 +21,11 @@ pub enum Prev {
     One(Value),
     Two(Value, Value),
     Many(Rc<Vec<Value>>),
+    Dot {
+        w: Vec<Value>,
+        x: Rc<Vec<Value>>,
+        b: Value,
+    },
 }
 
 pub struct FastCell<T>(pub Rc<UnsafeCell<T>>);
@@ -61,6 +67,30 @@ impl Value {
         }))))
     }
 
+    pub fn dot_tanh(w: &[Value], x: &Rc<Vec<Value>>, b: &Value) -> Value {
+        let mut data = b.0.borrow().data;
+        for (wi, xi) in w.iter().zip(x.iter()) {
+            data += wi.0.borrow().data * xi.0.borrow().data;
+        }
+        let e2x = (2.0 * data).exp();
+        let t = (e2x - 1.0) / (e2x + 1.0);
+        let out = Value::new(t);
+        out.0.borrow_mut()._prev = Prev::Dot { w: w.to_vec(), x: x.clone(), b: b.clone() };
+        out.0.borrow_mut()._op = Some(Op::DotTanh(w.len()));
+        out
+    }
+
+    pub fn dot(w: &[Value], x: &Rc<Vec<Value>>, b: &Value) -> Value {
+        let mut data = b.0.borrow().data;
+        for (wi, xi) in w.iter().zip(x.iter()) {
+            data += wi.0.borrow().data * xi.0.borrow().data;
+        }
+        let out = Value::new(data);
+        out.0.borrow_mut()._prev = Prev::Dot { w: w.to_vec(), x: x.clone(), b: b.clone() };
+        out.0.borrow_mut()._op = Some(Op::Dot(w.len()));
+        out
+    }
+
     pub fn backward(&self) {
         let mut topo: Vec<*mut ValueData> = Vec::with_capacity(4096);
         let counter = BACKWARD_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
@@ -86,6 +116,11 @@ impl Value {
                                 for child in vec.iter() {
                                     stack.push((child.clone(), false));
                                 }
+                            }
+                            Prev::Dot { w, x, b } => {
+                                for child in w.iter() { stack.push((child.clone(), false)); }
+                                for child in x.iter() { stack.push((child.clone(), false)); }
+                                stack.push((b.clone(), false));
                             }
                         }
                     }
@@ -140,15 +175,29 @@ impl Value {
                             }
                         }
                         Op::Dot(nin) => {
-                            if let Prev::Many(ref vec) = (*node_ptr)._prev {
+                            if let Prev::Dot { ref w, ref x, ref b } = (*node_ptr)._prev {
                                 let nin = *nin;
                                 for i in 0..nin {
-                                    let w_ptr = vec[i].0.0.get();
-                                    let x_ptr = vec[nin + i].0.0.get();
+                                    let w_ptr = w[i].0.0.get();
+                                    let x_ptr = x[i].0.0.get();
                                     (*w_ptr).grad += (*x_ptr).data * out_grad;
                                     (*x_ptr).grad += (*w_ptr).data * out_grad;
                                 }
-                                (*vec[2 * nin].0.0.get()).grad += out_grad;
+                                (*b.0.0.get()).grad += out_grad;
+                            }
+                        }
+                        Op::DotTanh(nin) => {
+                            if let Prev::Dot { ref w, ref x, ref b } = (*node_ptr)._prev {
+                                let nin = *nin;
+                                let d = (*node_ptr).data;
+                                let local_grad = (1.0 - d * d) * out_grad;
+                                for i in 0..nin {
+                                    let w_ptr = w[i].0.0.get();
+                                    let x_ptr = x[i].0.0.get();
+                                    (*w_ptr).grad += (*x_ptr).data * local_grad;
+                                    (*x_ptr).grad += (*w_ptr).data * local_grad;
+                                }
+                                (*b.0.0.get()).grad += local_grad;
                             }
                         }
                     }
@@ -180,24 +229,11 @@ impl Value {
 
     pub fn tanh(&self) -> Value {
         let x: f32 = self.0.borrow().data;
-        let t = ((2.0 * x).exp() - 1.0) / ((2.0 * x).exp() + 1.0);
+        let e2x = (2.0 * x).exp();
+        let t = (e2x - 1.0) / (e2x + 1.0);
         let out = Value::new(t);
         out.0.borrow_mut()._prev = Prev::One(self.clone());
         out.0.borrow_mut()._op = Some(Op::Tanh);
-        out
-    }
-
-    pub fn dot(w: &[Value], x: &[Value], b: &Value) -> Value {
-        let mut data = b.0.borrow().data;
-        for (wi, xi) in w.iter().zip(x.iter()) {
-            data += wi.0.borrow().data * xi.0.borrow().data;
-        }
-        let out = Value::new(data);
-        let mut prev = w.to_vec();
-        prev.extend_from_slice(x);
-        prev.push(b.clone());
-        out.0.borrow_mut()._prev = Prev::Many(Rc::new(prev));
-        out.0.borrow_mut()._op = Some(Op::Dot(w.len()));
         out
     }
 }

@@ -1,5 +1,6 @@
 use crate::engine::Value;
 use rand::distr::{Distribution, Uniform};
+use std::rc::Rc;
 
 pub struct Neuron {
     pub w: Vec<Value>,
@@ -20,12 +21,12 @@ impl Neuron {
         Neuron { w, b, params }
     }
 
-    pub fn call(&self, x: &[Value]) -> Value {
-        Value::dot(&self.w, x, &self.b).tanh()
+    pub fn call(&self, x: &Rc<Vec<Value>>) -> Value {
+        Value::dot_tanh(&self.w, x, &self.b)
     }
 
-    pub fn parameters(&self) -> Vec<Value> {
-        self.params.clone()
+    pub fn parameters(&self) -> &[Value] {
+        &self.params
     }
 }
 
@@ -37,14 +38,14 @@ pub struct Layer {
 impl Layer {
     pub fn new(nin: usize, nout: usize) -> Self {
         let neurons: Vec<Neuron> = (0..nout).map(|_| Neuron::new(nin)).collect();
-        let params = neurons.iter().flat_map(|n| n.parameters()).collect();
+        let params = neurons.iter().flat_map(|n| n.parameters().to_vec()).collect();
         Layer { neurons, params }
     }
-    pub fn call(&self, x: &[Value]) -> Vec<Value> {
+    pub fn call(&self, x: &Rc<Vec<Value>>) -> Vec<Value> {
         self.neurons.iter().map(|n| n.call(x)).collect()
     }
-    pub fn parameters(&self) -> Vec<Value> {
-        self.params.clone()
+    pub fn parameters(&self) -> &[Value] {
+        &self.params
     }
 }
 
@@ -60,17 +61,18 @@ impl MLP {
         let layers: Vec<Layer> = (0..sz.len() - 1)
             .map(|i| Layer::new(sz[i], sz[i+1]))
             .collect();
-        let params = layers.iter().flat_map(|l| l.parameters()).collect();
+        let params = layers.iter().flat_map(|l| l.parameters().to_vec()).collect();
         MLP { layers, params }
     }
     pub fn call(&self, mut x: Vec<Value>) -> Vec<Value> {
         for layer in &self.layers {
-            x = layer.call(&x);
+            let x_rc = Rc::new(x);
+            x = layer.call(&x_rc);
         }
         x
     }
-    pub fn parameters(&self) -> Vec<Value> {
-        self.params.clone()
+    pub fn parameters(&self) -> &[Value] {
+        &self.params
     }
     pub fn zero_grad(&self) {
         for p in &self.params {
