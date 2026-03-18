@@ -94,33 +94,33 @@ impl Value {
     pub fn backward(&self) {
         let mut topo: Vec<*mut ValueData> = Vec::with_capacity(4096);
         let counter = BACKWARD_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
-        let mut stack = vec![(self.clone(), false)];
+        let mut stack: Vec<(*mut ValueData, bool)> = Vec::with_capacity(4096);
+        stack.push((self.0.0.get(), false));
 
-        while let Some((v, processed)) = stack.pop() {
-            let v_ptr = v.0.0.get();
+        while let Some((v_ptr, processed)) = stack.pop() {
             if processed {
                 topo.push(v_ptr);
             } else {
                 unsafe {
                     if (*v_ptr).visited_at != counter {
                         (*v_ptr).visited_at = counter;
-                        stack.push((v, true));
+                        stack.push((v_ptr, true));
                         match &(*v_ptr)._prev {
                             Prev::None => (),
-                            Prev::One(a) => stack.push((a.clone(), false)),
+                            Prev::One(a) => stack.push((a.0.0.get(), false)),
                             Prev::Two(a, b) => {
-                                stack.push((a.clone(), false));
-                                stack.push((b.clone(), false));
+                                stack.push((a.0.0.get(), false));
+                                stack.push((b.0.0.get(), false));
                             }
                             Prev::Many(vec) => {
                                 for child in vec.iter() {
-                                    stack.push((child.clone(), false));
+                                    stack.push((child.0.0.get(), false));
                                 }
                             }
                             Prev::Dot { w, x, b } => {
-                                for child in w.iter() { stack.push((child.clone(), false)); }
-                                for child in x.iter() { stack.push((child.clone(), false)); }
-                                stack.push((b.clone(), false));
+                                for child in w.iter() { stack.push((child.0.0.get(), false)); }
+                                for child in x.iter() { stack.push((child.0.0.get(), false)); }
+                                stack.push((b.0.0.get(), false));
                             }
                         }
                     }
