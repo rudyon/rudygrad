@@ -22,7 +22,7 @@ pub enum Prev {
     Two(Value, Value),
     Many(Rc<Vec<Value>>),
     Dot {
-        w: Vec<Value>,
+        w: Rc<Vec<Value>>,
         x: Rc<Vec<Value>>,
         b: Value,
     },
@@ -67,7 +67,7 @@ impl Value {
         }))))
     }
 
-    pub fn dot_tanh(w: &[Value], x: &Rc<Vec<Value>>, b: &Value) -> Value {
+    pub fn dot_tanh(w: &Rc<Vec<Value>>, x: &Rc<Vec<Value>>, b: &Value) -> Value {
         let mut data = b.0.borrow().data;
         for (wi, xi) in w.iter().zip(x.iter()) {
             data += wi.0.borrow().data * xi.0.borrow().data;
@@ -75,18 +75,18 @@ impl Value {
         let e2x = (2.0 * data).exp();
         let t = (e2x - 1.0) / (e2x + 1.0);
         let out = Value::new(t);
-        out.0.borrow_mut()._prev = Prev::Dot { w: w.to_vec(), x: x.clone(), b: b.clone() };
+        out.0.borrow_mut()._prev = Prev::Dot { w: w.clone(), x: x.clone(), b: b.clone() };
         out.0.borrow_mut()._op = Some(Op::DotTanh(w.len()));
         out
     }
 
-    pub fn dot(w: &[Value], x: &Rc<Vec<Value>>, b: &Value) -> Value {
+    pub fn dot(w: &Rc<Vec<Value>>, x: &Rc<Vec<Value>>, b: &Value) -> Value {
         let mut data = b.0.borrow().data;
         for (wi, xi) in w.iter().zip(x.iter()) {
             data += wi.0.borrow().data * xi.0.borrow().data;
         }
         let out = Value::new(data);
-        out.0.borrow_mut()._prev = Prev::Dot { w: w.to_vec(), x: x.clone(), b: b.clone() };
+        out.0.borrow_mut()._prev = Prev::Dot { w: w.clone(), x: x.clone(), b: b.clone() };
         out.0.borrow_mut()._op = Some(Op::Dot(w.len()));
         out
     }

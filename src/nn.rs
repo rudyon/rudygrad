@@ -3,7 +3,7 @@ use rand::distr::{Distribution, Uniform};
 use std::rc::Rc;
 
 pub struct Neuron {
-    pub w: Vec<Value>,
+    pub w: Rc<Vec<Value>>,
     pub b: Value,
     pub params: Vec<Value>,
 }
@@ -12,13 +12,13 @@ impl Neuron {
     pub fn new(nin: usize) -> Self {
         let mut rng = rand::rng();
         let range = Uniform::new(-1.0f32, 1.0f32).unwrap();
-        let w: Vec<Value> = (0..nin)
+        let w_raw: Vec<Value> = (0..nin)
             .map(|_| Value::new(range.sample(&mut rng)))
             .collect();
         let b = Value::new(range.sample(&mut rng));
-        let mut params = w.clone();
+        let mut params = w_raw.clone();
         params.push(b.clone());
-        Neuron { w, b, params }
+        Neuron { w: Rc::new(w_raw), b, params }
     }
 
     pub fn call(&self, x: &Rc<Vec<Value>>) -> Value {
