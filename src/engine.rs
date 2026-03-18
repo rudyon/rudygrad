@@ -5,14 +5,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static BACKWARD_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+#[derive(Clone, Copy)]
 pub enum Op {
     Add,
     Mul,
     Pow(f32),
     ReLU,
     Tanh,
-    Dot(usize),
-    DotTanh(usize),
+    Dot(u32),
+    DotTanh(u32),
 }
 
 #[derive(Clone)]
@@ -50,7 +51,7 @@ pub struct ValueData {
     pub grad: f32,
     pub _prev: Prev,
     pub _op: Option<Op>,
-    pub visited_at: usize,
+    pub visited_at: u32,
 }
 
 #[derive(Clone)]
@@ -76,7 +77,7 @@ impl Value {
         let t = (e2x - 1.0) / (e2x + 1.0);
         let out = Value::new(t);
         out.0.borrow_mut()._prev = Prev::Dot { w: w.clone(), x: x.clone(), b: b.clone() };
-        out.0.borrow_mut()._op = Some(Op::DotTanh(w.len()));
+        out.0.borrow_mut()._op = Some(Op::DotTanh(w.len() as u32));
         out
     }
 
@@ -87,13 +88,13 @@ impl Value {
         }
         let out = Value::new(data);
         out.0.borrow_mut()._prev = Prev::Dot { w: w.clone(), x: x.clone(), b: b.clone() };
-        out.0.borrow_mut()._op = Some(Op::Dot(w.len()));
+        out.0.borrow_mut()._op = Some(Op::Dot(w.len() as u32));
         out
     }
 
     pub fn backward(&self) {
         let mut topo: Vec<*mut ValueData> = Vec::with_capacity(4096);
-        let counter = BACKWARD_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+        let counter = (BACKWARD_COUNTER.fetch_add(1, Ordering::Relaxed) + 1) as u32;
         let mut stack: Vec<(*mut ValueData, bool)> = Vec::with_capacity(4096);
         stack.push((self.0.0.get(), false));
 
@@ -135,7 +136,7 @@ impl Value {
                 let out_grad = (*node_ptr).grad;
                 if out_grad == 0.0 { continue; }
                 
-                if let Some(ref op) = (*node_ptr)._op {
+                if let Some(op) = (*node_ptr)._op {
                     match op {
                         Op::Add => {
                             if let Prev::Two(ref a, ref b) = (*node_ptr)._prev {
@@ -176,8 +177,7 @@ impl Value {
                         }
                         Op::Dot(nin) => {
                             if let Prev::Dot { ref w, ref x, ref b } = (*node_ptr)._prev {
-                                let nin = *nin;
-                                for i in 0..nin {
+                                for i in 0..nin as usize {
                                     let w_ptr = w[i].0.0.get();
                                     let x_ptr = x[i].0.0.get();
                                     (*w_ptr).grad += (*x_ptr).data * out_grad;
@@ -188,10 +188,9 @@ impl Value {
                         }
                         Op::DotTanh(nin) => {
                             if let Prev::Dot { ref w, ref x, ref b } = (*node_ptr)._prev {
-                                let nin = *nin;
                                 let d = (*node_ptr).data;
                                 let local_grad = (1.0 - d * d) * out_grad;
-                                for i in 0..nin {
+                                for i in 0..nin as usize {
                                     let w_ptr = w[i].0.0.get();
                                     let x_ptr = x[i].0.0.get();
                                     (*w_ptr).grad += (*x_ptr).data * local_grad;
