@@ -7,7 +7,6 @@ pub struct ValueData {
     pub data: f32,
     pub grad: f32,
     pub _prev: Vec<Value>,
-    pub _op: String,
     pub _backward: Option<Box<dyn Fn(f32)>>,
 }
 
@@ -20,7 +19,6 @@ impl Value {
             data,
             grad: 0.0,
             _prev: Vec::new(),
-            _op: String::new(),
             _backward: None,
         })))
     }
@@ -63,7 +61,6 @@ impl Value {
         let data = self.0.borrow().data.powf(other);
         let out = Value::new(data);
         
-        out.0.borrow_mut()._op = format!("**{}", other);
         out.0.borrow_mut()._prev = vec![self.clone()];
 
         let self_clone = self.clone();
@@ -81,7 +78,6 @@ impl Value {
         let out_data = if x > 0.0 { x } else { 0.0 };
         let out = Value::new(out_data);
         
-        out.0.borrow_mut()._op = "relu".to_string();
         out.0.borrow_mut()._prev = vec![self.clone()];
 
         let self_clone = self.clone();
@@ -97,7 +93,6 @@ impl Value {
         let t = ((2.0 * x).exp() - 1.0) / ((2.0 * x).exp() + 1.0);
         let out = Value::new(t);
 
-        out.0.borrow_mut()._op = "tanh".to_string();
         out.0.borrow_mut()._prev = vec![self.clone()];
 
         let self_clone = self.clone();
@@ -114,7 +109,6 @@ impl Add for Value {
     fn add(self, other: Value) -> Value {
         let out = Value::new(self.0.borrow().data + other.0.borrow().data);
         
-        out.0.borrow_mut()._op = "+".to_string();
         out.0.borrow_mut()._prev = vec![self.clone(), other.clone()];
 
         let self_clone = self.clone();
@@ -133,7 +127,6 @@ impl Mul for Value {
     fn mul(self, other: Value) -> Value {
         let out = Value::new(self.0.borrow().data * other.0.borrow().data);
         
-        out.0.borrow_mut()._op = "*".to_string();
         out.0.borrow_mut()._prev = vec![self.clone(), other.clone()];
 
         let self_clone = self.clone();
