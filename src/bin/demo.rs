@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let model = MLP::new(2, vec![16, 16, 1]);
 
-    let root = BitMapBackend::gif("rudygrad_training.gif", (600, 500), 100)?.into_drawing_area();
+    let root = BitMapBackend::gif("demo.gif", (600, 500), 100)?.into_drawing_area();
 
     println!("Starting training loop...\n");
     for k in 0..=100 {
