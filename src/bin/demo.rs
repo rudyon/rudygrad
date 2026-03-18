@@ -50,7 +50,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::gif("demo.gif", (600, 500), 100)?.into_drawing_area();
 
     println!("Starting training loop...\n");
+    let start_time = std::time::Instant::now();
+    let mut total_training_time = std::time::Duration::from_secs(0);
+
     for k in 0..=100 {
+        let step_start = std::time::Instant::now();
         let mut total_loss = Value::new(0.0);
         let mut correct = 0;
 
@@ -78,6 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let grad = p.0.borrow().grad;
             p.0.borrow_mut().data -= learning_rate * grad;
         }
+        total_training_time += step_start.elapsed();
 
         if k % 5 == 0 {
             println!("Step {:>3} | Loss: {:.4} | Accuracy: {:.1}%", k, final_loss.0.borrow().data, accuracy);
@@ -132,6 +137,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     
+    let total_elapsed = start_time.elapsed();
+    let avg_step_time = total_training_time.as_secs_f32() / 101.0; 
+    
+    println!("\nTraining complete!");
+    println!("Total training duration:  {:.2?}", total_elapsed);
+    println!("Core training time only: {:.2?}", total_training_time);
+    println!("Average core step time:  {:.4}ms", avg_step_time * 1000.0);
     println!("Saved GIF to 'demo.gif'");
     Ok(())
 }
