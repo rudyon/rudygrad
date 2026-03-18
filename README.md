@@ -1,3 +1,5 @@
 # rudygrad
 
-A tiny Autograd engine. Clone of [micrograd](https://github.com/karpathy/micrograd) created by watching and following along with the [tutorial](https://youtu.be/VMj-3S1tku0?si=7Q1_3PUlu4kQVMCe). To see what it does you can look at or run the [demo](https://github.com/rudyon/rudygrad/blob/master/demo.ipynb).
+A tiny Autograd engine. I am trying to make it more optimized to specifically be ran on CPUs.
+
+![](demo.gif)
