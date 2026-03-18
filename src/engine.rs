@@ -1,7 +1,9 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::ops::{Add, Mul, Neg, Sub};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static BACKWARD_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 pub enum Op {
     Add,
@@ -17,6 +19,7 @@ pub struct ValueData {
     pub grad: f32,
     pub _prev: Vec<Value>,
     pub _op: Option<Op>,
+    pub visited_at: usize,
 }
 
 #[derive(Clone)]
@@ -29,23 +32,28 @@ impl Value {
             grad: 0.0,
             _prev: Vec::new(),
             _op: None,
+            visited_at: 0,
         })))
     }
 
     pub fn backward(&self) {
         let mut topo = Vec::new();
-        let mut visited = HashSet::new();
+        let counter = BACKWARD_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
         let mut stack = vec![(self.clone(), false)];
 
         while let Some((v, processed)) = stack.pop() {
-            let ptr = Rc::as_ptr(&v.0);
             if processed {
                 topo.push(v);
-            } else if !visited.contains(&ptr) {
-                visited.insert(ptr);
-                stack.push((v.clone(), true));
-                for child in &v.0.borrow()._prev {
-                    stack.push((child.clone(), false));
+            } else {
+                let mut v_mut = v.0.borrow_mut();
+                if v_mut.visited_at != counter {
+                    v_mut.visited_at = counter;
+                    drop(v_mut);
+                    stack.push((v.clone(), true));
+                    let v_borrow = v.0.borrow();
+                    for child in &v_borrow._prev {
+                        stack.push((child.clone(), false));
+                    }
                 }
             }
         }
