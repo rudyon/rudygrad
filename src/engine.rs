@@ -3,11 +3,20 @@ use std::collections::HashSet;
 use std::ops::{Add, Mul, Neg, Sub};
 use std::rc::Rc;
 
+pub enum Op {
+    Add,
+    Mul,
+    Pow(f32),
+    ReLU,
+    Tanh,
+    Dot(usize),
+}
+
 pub struct ValueData {
     pub data: f32,
     pub grad: f32,
     pub _prev: Vec<Value>,
-    pub _backward: Option<Box<dyn Fn(f32)>>,
+    pub _op: Option<Op>,
 }
 
 #[derive(Clone)]
@@ -19,36 +28,68 @@ impl Value {
             data,
             grad: 0.0,
             _prev: Vec::new(),
-            _backward: None,
+            _op: None,
         })))
     }
 
     pub fn backward(&self) {
         let mut topo = Vec::new();
         let mut visited = HashSet::new();
+        let mut stack = vec![(self.clone(), false)];
 
-        fn build_topo(
-            v: &Value,
-            visited: &mut HashSet<*const RefCell<ValueData>>,
-            topo: &mut Vec<Value>,
-        ) {
+        while let Some((v, processed)) = stack.pop() {
             let ptr = Rc::as_ptr(&v.0);
-            if !visited.contains(&ptr) {
+            if processed {
+                topo.push(v);
+            } else if !visited.contains(&ptr) {
                 visited.insert(ptr);
+                stack.push((v.clone(), true));
                 for child in &v.0.borrow()._prev {
-                    build_topo(child, visited, topo);
+                    stack.push((child.clone(), false));
                 }
-                topo.push(v.clone());
             }
         }
 
-        build_topo(self, &mut visited, &mut topo);
         self.0.borrow_mut().grad = 1.0;
 
         for node in topo.iter().rev() {
             let out_grad = node.0.borrow().grad;
-            if let Some(ref backward_fn) = node.0.borrow()._backward {
-                backward_fn(out_grad);
+            let node_borrow = node.0.borrow();
+            if let Some(ref op) = node_borrow._op {
+                match op {
+                    Op::Add => {
+                        node_borrow._prev[0].0.borrow_mut().grad += out_grad;
+                        node_borrow._prev[1].0.borrow_mut().grad += out_grad;
+                    }
+                    Op::Mul => {
+                        let d0 = node_borrow._prev[0].0.borrow().data;
+                        let d1 = node_borrow._prev[1].0.borrow().data;
+                        node_borrow._prev[0].0.borrow_mut().grad += d1 * out_grad;
+                        node_borrow._prev[1].0.borrow_mut().grad += d0 * out_grad;
+                    }
+                    Op::Pow(other) => {
+                        let d0 = node_borrow._prev[0].0.borrow().data;
+                        node_borrow._prev[0].0.borrow_mut().grad += (other * d0.powf(other - 1.0)) * out_grad;
+                    }
+                    Op::ReLU => {
+                        let d = node_borrow.data;
+                        node_borrow._prev[0].0.borrow_mut().grad += (if d > 0.0 { 1.0 } else { 0.0 }) * out_grad;
+                    }
+                    Op::Tanh => {
+                        let d = node_borrow.data;
+                        node_borrow._prev[0].0.borrow_mut().grad += (1.0 - d * d) * out_grad;
+                    }
+                    Op::Dot(nin) => {
+                        let nin = *nin;
+                        for i in 0..nin {
+                            let w_data = node_borrow._prev[i].0.borrow().data;
+                            let x_data = node_borrow._prev[nin + i].0.borrow().data;
+                            node_borrow._prev[i].0.borrow_mut().grad += x_data * out_grad;
+                            node_borrow._prev[nin + i].0.borrow_mut().grad += w_data * out_grad;
+                        }
+                        node_borrow._prev[2 * nin].0.borrow_mut().grad += out_grad;
+                    }
+                }
             }
         }
     }
@@ -60,16 +101,8 @@ impl Value {
     pub fn pow(&self, other: f32) -> Value {
         let data = self.0.borrow().data.powf(other);
         let out = Value::new(data);
-        
         out.0.borrow_mut()._prev = vec![self.clone()];
-
-        let self_clone = self.clone();
-        
-        
-        out.0.borrow_mut()._backward = Some(Box::new(move |out_grad| {
-            let self_data = self_clone.0.borrow().data;
-            self_clone.0.borrow_mut().grad += (other * self_data.powf(other - 1.0)) * out_grad;
-        }));
+        out.0.borrow_mut()._op = Some(Op::Pow(other));
         out
     }
 
@@ -77,14 +110,8 @@ impl Value {
         let x = self.0.borrow().data;
         let out_data = if x > 0.0 { x } else { 0.0 };
         let out = Value::new(out_data);
-        
         out.0.borrow_mut()._prev = vec![self.clone()];
-
-        let self_clone = self.clone();
-        
-        out.0.borrow_mut()._backward = Some(Box::new(move |out_grad| {
-            self_clone.0.borrow_mut().grad += (if out_data > 0.0 { 1.0 } else { 0.0 }) * out_grad;
-        }));
+        out.0.borrow_mut()._op = Some(Op::ReLU);
         out
     }
 
@@ -92,14 +119,8 @@ impl Value {
         let x = self.0.borrow().data;
         let t = ((2.0 * x).exp() - 1.0) / ((2.0 * x).exp() + 1.0);
         let out = Value::new(t);
-
         out.0.borrow_mut()._prev = vec![self.clone()];
-
-        let self_clone = self.clone();
-
-        out.0.borrow_mut()._backward = Some(Box::new(move |out_grad| {
-            self_clone.0.borrow_mut().grad += (1.0 - t.powi(2)) * out_grad;
-        }));
+        out.0.borrow_mut()._op = Some(Op::Tanh);
         out
     }
 
@@ -109,25 +130,11 @@ impl Value {
             data += wi.0.borrow().data * xi.0.borrow().data;
         }
         let out = Value::new(data);
-        
         let mut prev = w.to_vec();
         prev.extend_from_slice(x);
         prev.push(b.clone());
         out.0.borrow_mut()._prev = prev;
-
-        let w_clone = w.to_vec();
-        let x_clone = x.to_vec();
-        let b_clone = b.clone();
-
-        out.0.borrow_mut()._backward = Some(Box::new(move |out_grad| {
-            for (wi, xi) in w_clone.iter().zip(x_clone.iter()) {
-                let w_data = wi.0.borrow().data;
-                let x_data = xi.0.borrow().data;
-                wi.0.borrow_mut().grad += x_data * out_grad;
-                xi.0.borrow_mut().grad += w_data * out_grad;
-            }
-            b_clone.0.borrow_mut().grad += out_grad;
-        }));
+        out.0.borrow_mut()._op = Some(Op::Dot(w.len()));
         out
     }
 }
@@ -136,16 +143,8 @@ impl Add for Value {
     type Output = Value;
     fn add(self, other: Value) -> Value {
         let out = Value::new(self.0.borrow().data + other.0.borrow().data);
-        
         out.0.borrow_mut()._prev = vec![self.clone(), other.clone()];
-
-        let self_clone = self.clone();
-        let other_clone = other.clone();
-        
-        out.0.borrow_mut()._backward = Some(Box::new(move |out_grad| {
-            self_clone.0.borrow_mut().grad += out_grad;
-            other_clone.0.borrow_mut().grad += out_grad;
-        }));
+        out.0.borrow_mut()._op = Some(Op::Add);
         out
     }
 }
@@ -154,19 +153,8 @@ impl Mul for Value {
     type Output = Value;
     fn mul(self, other: Value) -> Value {
         let out = Value::new(self.0.borrow().data * other.0.borrow().data);
-        
         out.0.borrow_mut()._prev = vec![self.clone(), other.clone()];
-
-        let self_clone = self.clone();
-        let other_clone = other.clone();
-
-        out.0.borrow_mut()._backward = Some(Box::new(move |out_grad| {
-            let self_data = self_clone.0.borrow().data;
-            let other_data = other_clone.0.borrow().data;
-            
-            self_clone.0.borrow_mut().grad += other_data * out_grad;
-            other_clone.0.borrow_mut().grad += self_data * out_grad;
-        }));
+        out.0.borrow_mut()._op = Some(Op::Mul);
         out
     }
 }
