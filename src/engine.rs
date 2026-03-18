@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::UnsafeCell;
 use std::ops::{Add, Mul, Neg, Sub};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,88 +14,143 @@ pub enum Op {
     Dot(usize),
 }
 
+#[derive(Clone)]
+pub enum Prev {
+    None,
+    One(Value),
+    Two(Value, Value),
+    Many(Rc<Vec<Value>>),
+}
+
+pub struct FastCell<T>(pub Rc<UnsafeCell<T>>);
+
+impl<T> FastCell<T> {
+    pub fn borrow(&self) -> &T {
+        unsafe { &*self.0.get() }
+    }
+    pub fn borrow_mut(&self) -> &mut T {
+        unsafe { &mut *self.0.get() }
+    }
+}
+
+impl<T> Clone for FastCell<T> {
+    fn clone(&self) -> Self {
+        FastCell(self.0.clone())
+    }
+}
+
 pub struct ValueData {
     pub data: f32,
     pub grad: f32,
-    pub _prev: Vec<Value>,
+    pub _prev: Prev,
     pub _op: Option<Op>,
     pub visited_at: usize,
 }
 
 #[derive(Clone)]
-pub struct Value(pub Rc<RefCell<ValueData>>);
+pub struct Value(pub FastCell<ValueData>);
 
 impl Value {
     pub fn new(data: f32) -> Self {
-        Value(Rc::new(RefCell::new(ValueData {
+        Value(FastCell(Rc::new(UnsafeCell::new(ValueData {
             data,
             grad: 0.0,
-            _prev: Vec::new(),
+            _prev: Prev::None,
             _op: None,
             visited_at: 0,
-        })))
+        }))))
     }
 
     pub fn backward(&self) {
-        let mut topo = Vec::new();
+        let mut topo: Vec<*mut ValueData> = Vec::with_capacity(4096);
         let counter = BACKWARD_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
         let mut stack = vec![(self.clone(), false)];
 
         while let Some((v, processed)) = stack.pop() {
+            let v_ptr = v.0.0.get();
             if processed {
-                topo.push(v);
+                topo.push(v_ptr);
             } else {
-                let mut v_mut = v.0.borrow_mut();
-                if v_mut.visited_at != counter {
-                    v_mut.visited_at = counter;
-                    drop(v_mut);
-                    stack.push((v.clone(), true));
-                    let v_borrow = v.0.borrow();
-                    for child in &v_borrow._prev {
-                        stack.push((child.clone(), false));
+                unsafe {
+                    if (*v_ptr).visited_at != counter {
+                        (*v_ptr).visited_at = counter;
+                        stack.push((v, true));
+                        match &(*v_ptr)._prev {
+                            Prev::None => (),
+                            Prev::One(a) => stack.push((a.clone(), false)),
+                            Prev::Two(a, b) => {
+                                stack.push((a.clone(), false));
+                                stack.push((b.clone(), false));
+                            }
+                            Prev::Many(vec) => {
+                                for child in vec.iter() {
+                                    stack.push((child.clone(), false));
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
-        self.0.borrow_mut().grad = 1.0;
+        unsafe { (*self.0.0.get()).grad = 1.0; }
 
-        for node in topo.iter().rev() {
-            let out_grad = node.0.borrow().grad;
-            let node_borrow = node.0.borrow();
-            if let Some(ref op) = node_borrow._op {
-                match op {
-                    Op::Add => {
-                        node_borrow._prev[0].0.borrow_mut().grad += out_grad;
-                        node_borrow._prev[1].0.borrow_mut().grad += out_grad;
-                    }
-                    Op::Mul => {
-                        let d0 = node_borrow._prev[0].0.borrow().data;
-                        let d1 = node_borrow._prev[1].0.borrow().data;
-                        node_borrow._prev[0].0.borrow_mut().grad += d1 * out_grad;
-                        node_borrow._prev[1].0.borrow_mut().grad += d0 * out_grad;
-                    }
-                    Op::Pow(other) => {
-                        let d0 = node_borrow._prev[0].0.borrow().data;
-                        node_borrow._prev[0].0.borrow_mut().grad += (other * d0.powf(other - 1.0)) * out_grad;
-                    }
-                    Op::ReLU => {
-                        let d = node_borrow.data;
-                        node_borrow._prev[0].0.borrow_mut().grad += (if d > 0.0 { 1.0 } else { 0.0 }) * out_grad;
-                    }
-                    Op::Tanh => {
-                        let d = node_borrow.data;
-                        node_borrow._prev[0].0.borrow_mut().grad += (1.0 - d * d) * out_grad;
-                    }
-                    Op::Dot(nin) => {
-                        let nin = *nin;
-                        for i in 0..nin {
-                            let w_data = node_borrow._prev[i].0.borrow().data;
-                            let x_data = node_borrow._prev[nin + i].0.borrow().data;
-                            node_borrow._prev[i].0.borrow_mut().grad += x_data * out_grad;
-                            node_borrow._prev[nin + i].0.borrow_mut().grad += w_data * out_grad;
+        for &node_ptr in topo.iter().rev() {
+            unsafe {
+                let out_grad = (*node_ptr).grad;
+                if out_grad == 0.0 { continue; }
+                
+                if let Some(ref op) = (*node_ptr)._op {
+                    match op {
+                        Op::Add => {
+                            if let Prev::Two(ref a, ref b) = (*node_ptr)._prev {
+                                (*a.0.0.get()).grad += out_grad;
+                                (*b.0.0.get()).grad += out_grad;
+                            }
                         }
-                        node_borrow._prev[2 * nin].0.borrow_mut().grad += out_grad;
+                        Op::Mul => {
+                            if let Prev::Two(ref a, ref b) = (*node_ptr)._prev {
+                                let d0 = (*a.0.0.get()).data;
+                                let d1 = (*b.0.0.get()).data;
+                                (*a.0.0.get()).grad += d1 * out_grad;
+                                (*b.0.0.get()).grad += d0 * out_grad;
+                            }
+                        }
+                        Op::Pow(other) => {
+                            if let Prev::One(ref a) = (*node_ptr)._prev {
+                                let d0 = (*a.0.0.get()).data;
+                                (*a.0.0.get()).grad += (other * d0.powf(other - 1.0)) * out_grad;
+                            }
+                        }
+                        Op::ReLU => {
+                            if let Prev::One(ref a) = (*node_ptr)._prev {
+                                let d = (*node_ptr).data;
+                                if d > 0.0 {
+                                    (*a.0.0.get()).grad += out_grad;
+                                }
+                            }
+                        }
+                        Op::Tanh => {
+                            if let Prev::One(ref a) = (*node_ptr)._prev {
+                                let d = (*node_ptr).data;
+                                let local_grad = 1.0 - d * d;
+                                if local_grad != 0.0 {
+                                    (*a.0.0.get()).grad += local_grad * out_grad;
+                                }
+                            }
+                        }
+                        Op::Dot(nin) => {
+                            if let Prev::Many(ref vec) = (*node_ptr)._prev {
+                                let nin = *nin;
+                                for i in 0..nin {
+                                    let w_ptr = vec[i].0.0.get();
+                                    let x_ptr = vec[nin + i].0.0.get();
+                                    (*w_ptr).grad += (*x_ptr).data * out_grad;
+                                    (*x_ptr).grad += (*w_ptr).data * out_grad;
+                                }
+                                (*vec[2 * nin].0.0.get()).grad += out_grad;
+                            }
+                        }
                     }
                 }
             }
@@ -109,7 +164,7 @@ impl Value {
     pub fn pow(&self, other: f32) -> Value {
         let data = self.0.borrow().data.powf(other);
         let out = Value::new(data);
-        out.0.borrow_mut()._prev = vec![self.clone()];
+        out.0.borrow_mut()._prev = Prev::One(self.clone());
         out.0.borrow_mut()._op = Some(Op::Pow(other));
         out
     }
@@ -118,16 +173,16 @@ impl Value {
         let x = self.0.borrow().data;
         let out_data = if x > 0.0 { x } else { 0.0 };
         let out = Value::new(out_data);
-        out.0.borrow_mut()._prev = vec![self.clone()];
+        out.0.borrow_mut()._prev = Prev::One(self.clone());
         out.0.borrow_mut()._op = Some(Op::ReLU);
         out
     }
 
     pub fn tanh(&self) -> Value {
-        let x = self.0.borrow().data;
+        let x: f32 = self.0.borrow().data;
         let t = ((2.0 * x).exp() - 1.0) / ((2.0 * x).exp() + 1.0);
         let out = Value::new(t);
-        out.0.borrow_mut()._prev = vec![self.clone()];
+        out.0.borrow_mut()._prev = Prev::One(self.clone());
         out.0.borrow_mut()._op = Some(Op::Tanh);
         out
     }
@@ -141,7 +196,7 @@ impl Value {
         let mut prev = w.to_vec();
         prev.extend_from_slice(x);
         prev.push(b.clone());
-        out.0.borrow_mut()._prev = prev;
+        out.0.borrow_mut()._prev = Prev::Many(Rc::new(prev));
         out.0.borrow_mut()._op = Some(Op::Dot(w.len()));
         out
     }
@@ -151,7 +206,7 @@ impl Add for Value {
     type Output = Value;
     fn add(self, other: Value) -> Value {
         let out = Value::new(self.0.borrow().data + other.0.borrow().data);
-        out.0.borrow_mut()._prev = vec![self.clone(), other.clone()];
+        out.0.borrow_mut()._prev = Prev::Two(self.clone(), other.clone());
         out.0.borrow_mut()._op = Some(Op::Add);
         out
     }
@@ -161,7 +216,7 @@ impl Mul for Value {
     type Output = Value;
     fn mul(self, other: Value) -> Value {
         let out = Value::new(self.0.borrow().data * other.0.borrow().data);
-        out.0.borrow_mut()._prev = vec![self.clone(), other.clone()];
+        out.0.borrow_mut()._prev = Prev::Two(self.clone(), other.clone());
         out.0.borrow_mut()._op = Some(Op::Mul);
         out
     }
