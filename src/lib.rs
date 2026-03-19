@@ -5,3 +5,5 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 pub mod engine;
 pub mod nn;
+pub mod datasets;
+pub mod util;

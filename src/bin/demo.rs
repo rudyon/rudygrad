@@ -1,40 +1,7 @@
 use rudygrad::engine::Value;
 use rudygrad::nn::MLP;
-use rand::{Rng, RngExt};
-use std::f32::consts::PI;
+use rudygrad::datasets::make_moons;
 use plotters::prelude::*;
-
-fn rand_normal(rng: &mut impl Rng) -> f32 {
-    let u1: f32 = rng.random_range(0.0001..1.0);
-    let u2: f32 = rng.random_range(0.0001..1.0);
-    (-2.0 * u1.ln()).sqrt() * (2.0 * PI * u2).cos()
-}
-
-fn make_moons(n_samples: usize, noise: f32) -> (Vec<Vec<f32>>, Vec<f32>) {
-    let mut rng = rand::rng();
-    let mut inputs = Vec::with_capacity(n_samples);
-    let mut targets = Vec::with_capacity(n_samples);
-
-    let n_out = n_samples / 2;
-    let n_in = n_samples - n_out;
-
-    for _ in 0..n_out {
-        let theta = rng.random_range(0.0..PI);
-        let nx = rand_normal(&mut rng) * noise;
-        let ny = rand_normal(&mut rng) * noise;
-        inputs.push(vec![theta.cos() + nx, theta.sin() + ny]);
-        targets.push(-1.0); 
-    }
-
-    for _ in 0..n_in {
-        let theta = rng.random_range(0.0..PI);
-        let nx = rand_normal(&mut rng) * noise;
-        let ny = rand_normal(&mut rng) * noise;
-        inputs.push(vec![1.0 - theta.cos() + nx, 1.0 - theta.sin() - 0.5 + ny]);
-        targets.push(1.0);
-    }
-    (inputs, targets)
-}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Generating moons dataset...");
