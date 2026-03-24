@@ -1,0 +1,4 @@
+maturin
+matplotlib
+numpy
+scikit-learn

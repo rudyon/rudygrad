@@ -3,6 +3,10 @@ name = "rudygrad"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "rudygrad"
+crate-type = ["cdylib", "rlib"]
+
 [profile.release]
 lto = true
 codegen-units = 1
@@ -13,3 +17,4 @@ rand = "0.10"
 rayon = "1.11"
 plotters = "0.3"
 mimalloc = "0.1"
+pyo3 = { version = "0.28.2", features = ["extension-module"] }
